@@ -1,0 +1,6 @@
+# test_winrm.yml
+- name: Test WinRM connection
+  hosts: windows_servers
+  tasks:
+    - name: Test connection
+      ansible.windows.win_ping:

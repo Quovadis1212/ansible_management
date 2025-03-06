@@ -1,0 +1,41 @@
+# update_raspberry_pi.yml
+- name: Update Raspberry Pi Devices
+  hosts: raspberry_pi
+  become: yes
+  tasks:
+    - name: Update package list
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+
+    - name: Check for required reboot
+      shell: |
+        if [ -f /var/run/reboot-required ]; then
+          echo "Reboot required"
+        else
+          echo "No reboot needed"
+        fi
+      register: reboot_required
+      changed_when: false
+
+    - name: Reboot if required
+      reboot:
+      when: reboot_required.stdout == "Reboot required"
+
+    - name: Wait for Raspberry Pi to come back online
+      wait_for_connection:
+        delay: 60
+        sleep: 5
+        timeout: 300
+    
+    - name: Confirm Raspberry Pi is back online
+      ping:
+      register: ping_result
+
+    - name: Get update summary
+      shell: apt list --upgradable
+      register: update_summary

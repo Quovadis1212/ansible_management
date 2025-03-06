@@ -1,0 +1,35 @@
+
+- name: Apply Windows updates
+  hosts: windows_servers
+  gather_facts: yes
+
+  tasks:
+    # Reboot systems with large uptime
+    - name: Reboot if uptime exceeds 1 day
+      win_reboot:
+      when: ansible_uptime_seconds > 86400
+      tags: reboot
+
+    - name: Install Windows updates
+      ansible.windows.win_updates:
+        category_names:
+          - SecurityUpdates
+          - CriticalUpdates
+          - UpdateRollups
+          - DefinitionUpdates
+          - Updates 
+        reboot: yes
+      register: update_results
+
+
+    # Handle failures
+    - name: Display update errors (if any)
+      debug:
+        msg: "Update failed: {{ update_results.msg }}"
+      when: update_results.failed
+      tags: error
+
+    # Report results
+    - name: Show update summary
+      debug:
+        var: update_results

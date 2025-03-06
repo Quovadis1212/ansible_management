@@ -1,0 +1,107 @@
+- name: Configure Bind9 inside LXC on Raspberry Pi
+  hosts: raspberrypi
+  become: true
+  vars:
+    container_name: dns1
+
+  tasks:
+    - name: Install Bind9 inside the LXC container
+      command: lxc-attach -n {{ container_name }} -- apt-get install -y bind9
+
+    - name: Create directories for Bind9 zones inside the LXC container
+      command: lxc-attach -n {{ container_name }} -- mkdir -p /var/lib/bind/master /var/lib/bind/slave
+
+    - name: make bind:bind owner 
+      command: lxc-attach -n {{ container_name }} -- chown -R bind:bind /var/lib/bind/slave
+
+    - name: and set 755 permissions
+      command: lxc-attach -n {{ container_name }} -- chmod -R 755 /var/lib/bind/slave
+
+    - name: Configure forward zone for team01.t-nos.ch
+      copy:
+        content: |
+          $TTL 60
+          @ IN  SOA ns1.team01.t-nos.ch. host-admin.t-nos.ch. (
+                  2024120902 ; Serial (YYYYMMDDXX format)
+                  604800       ; Refresh
+                  86400      ; Retry
+                  2419200   ; Expire
+                  60      ; Minimum TTL
+              )
+          @ IN  NS  ns1.team01.t-nos.ch.
+          @ IN  NS  ns2.team01.t-nos.ch.
+          host-t01a.team01.t-nos.ch. IN  A 10.1.1.1
+          host-t01b.team01.t-nos.ch. IN  A 10.1.2.1
+          ns1.team01.t-nos.ch. IN  A 10.1.1.10
+          ns2.team01.t-nos.ch. IN  A 10.1.2.10
+          ldap1.team01.t-nos.ch. IN  A 10.1.1.11
+          ldap2.team01.t-nos.ch. IN  A 10.1.2.11
+          test1.team01.t-nos.ch. IN  A 10.1.1.99
+          test2.team01.t-nos.ch. IN  A 10.1.2.99
+
+          team01.t-nos.ch. IN TXT "( . Y . )"
+          ; LDAP SRV Records
+          _ldap._tcp.team01.t-nos.ch.    IN SRV 10 5 389 ldap1.team01.t-nos.ch.
+          _ldap._tcp.team01.t-nos.ch.    IN SRV 20 5 389 ldap2.team01.t-nos.ch.
+
+          ; Delegation for test1.team01.t-nos.ch.
+          test.team01.t-nos.ch.    IN NS   ns1.test.team01.t-nos.ch.
+          test.team01.t-nos.ch.    IN NS   ns2.test.team01.t-nos.ch.
+          ns1.test.team01.t-nos.ch. IN A    10.1.2.10
+          ns2.test.team01.t-nos.ch. IN A    10.1.1.10
+
+        dest: /var/lib/lxc/{{ container_name }}/rootfs/var/lib/bind/master/db.ch.t-nos.team01
+
+    - name: Configure reverse zone for team01.t-nos.ch
+      copy:
+        content: |
+          $TTL 60
+          @ IN  SOA ns1.team01.t-nos.ch. host-admin.t-nos.ch. (
+                  2024120901 ; Serial (YYYYMMDDXX format)
+                  604800     ; Refresh
+                  86400      ; Retry
+                  2419200    ; Expire
+                  60         ; Minimum TTL
+              )
+
+          @ IN  NS  ns1.team01.t-nos.ch.
+          @ IN  NS  ns2.team01.t-nos.ch.
+
+          1.1 IN  PTR host-t01a.team01.t-nos.ch.
+          1.2 IN  PTR host-t01b.team01.t-nos.ch.
+          10.1 IN  PTR ns1.team01.t-nos.ch.
+          10.2 IN  PTR ns2.team01.t-nos.ch.
+          11.1 IN  PTR ldap1.team01.t-nos.ch.
+          11.2 IN  PTR ldap2.team01.t-nos.ch.
+          99.1 IN  PTR test1.team01.t-nos.ch.
+          99.2 IN  PTR test2.team01.t-nos.ch.
+
+        dest: /var/lib/lxc/{{ container_name }}/rootfs/var/lib/bind/master/db.10.1
+
+    - name: Add zones to Bind9 configuration
+      blockinfile:
+        path: /var/lib/lxc/{{ container_name }}/rootfs/etc/bind/named.conf.local
+        block: |
+          zone "team01.t-nos.ch" {
+                  type master;
+                  file "/var/lib/bind/master/db.ch.t-nos.team01";
+                  allow-transfer {10.1.2.10;};
+          };
+
+          zone "test.team01.t-nos.ch" {
+                  type slave;
+                  file "/var/lib/bind/slave/db.ch.t-nos.team01.test";
+                  masters {10.1.2.10;};
+          };
+
+          zone "1.1.10.in-addr.arpa" {
+                  type master;
+                  file "/var/lib/bind/master/db.10.1.1";
+                  allow-transfer {10.1.2.10;};
+          };
+
+    - name: Check Bind9 configuration inside the LXC container
+      command: lxc-attach -n {{ container_name }} -- named-checkconf
+
+    - name: Restart Bind9 inside the LXC container
+      command: lxc-attach -n {{ container_name }} -- systemctl restart bind9

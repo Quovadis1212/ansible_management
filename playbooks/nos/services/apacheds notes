@@ -1,0 +1,55 @@
+apt install apacheds
+apt install ldap-utils
+apt install samba smbclient
+
+route add 10.1.0.0 MASK 255.255.0.0 10.100.2.139 METRIC 1
+route add 10.1.0.0 MASK 255.255.0.0 192.168.1.126 METRIC 1 IF 15
+
+https://technology.amis.nl/architecture/security/getting-started-with-apacheds-ldap-server-and-directory-studio/
+
+Change port: https://directory.apache.org/apacheds/basic-ug/1.4.1-changing-server-port.html
+
+
+create partition: dc=team01,dc=t-nos,dc=ch
+
+log location: tail -f /var/log/apacheds/apacheds-rolling.log
+
+
+enable samba and nis schema
+
+------------------------------------
+# OU for users
+dn: ou=users,dc=team01,dc=t-nos,dc=ch
+objectClass: top
+objectClass: organizationalUnit
+ou: users
+
+# OU for groups
+dn: ou=groups,dc=team01,dc=t-nos,dc=ch
+objectClass: top
+objectClass: organizationalUnit
+ou: groups
+
+# POSIX user: check
+dn: uid=check,ou=users,dc=team01,dc=t-nos,dc=ch
+objectClass: inetOrgPerson
+objectClass: posixAccount
+objectClass: shadowAccount
+cn: Check User
+sn: User
+uid: check
+uidNumber: 1001
+gidNumber: 1001
+homeDirectory: /home/check
+loginShell: /bin/bash
+description: Unix User for check
+userPassword: {CRYPT}$6$FDV62l9q$N2Vw2h6MkIen8wydO3PmvEZM08EARyrA1THsvixuXs3qYlx2QKQQyA/QRgEGxSA9q4dRuQchyAVdNQJjTuCDX.
+
+# POSIX group: users
+dn: cn=users,ou=groups,dc=team01,dc=t-nos,dc=ch
+objectClass: top
+objectClass: posixGroup
+cn: users
+gidNumber: 1001
+memberUid: check
+

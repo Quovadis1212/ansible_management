@@ -1,0 +1,42 @@
+all:
+  children:
+    proxmox:
+      hosts:
+        pve:
+          ansible_host: xxx.xxx.xxx.xxx
+          ansible_user: root
+          ansible_ssh_private_key_file: /pfad/zum/schlüssel
+          api_user: root@pam
+          api_password: "********"
+          validate_certs: false
+ 
+    ubuntu_servers:
+      hosts:
+        dockersrv:
+          ansible_host: xxx.xxx.xxx.xxx
+          ansible_user: dave
+ 
+    docker_containers:
+      hosts:
+        dockersrv:
+          ansible_host: xxx.xxx.xxx.xxx
+          ansible_user: dave
+ 
+    windows_servers:
+      hosts:
+        windows_server1:
+          ansible_host: xxx.xxx.xxx.xxx
+          ansible_user: Administrator
+          ansible_password: "********"
+          ansible_connection: winrm
+          ansible_winrm_server_cert_validation: ignore
+ 
+    raspberrypi:
+      hosts:
+        homepi:
+          ansible_host: homepi
+          ansible_user: pi
+        host-t01a:
+          ansible_host: host-t01a
+          ansible_user: pi
+ 

@@ -1,0 +1,16 @@
+---
+- name: Clone cloud-init template
+  hosts: proxmox
+  tasks:
+    - name: Clone VM
+      community.general.proxmox_kvm:
+        api_host: "{{ ansible_host }}"
+        api_token_id: ansible
+        api_token_secret: "{{ api_password }}"
+        api_user: "{{ api_user }}"
+        clone: template-debian12
+        full: true
+        name: test
+        node: pve
+        storage: nvme
+        newid: 400

@@ -1,0 +1,36 @@
+- name: Update Proxmox Host
+  hosts: proxmox
+  become: yes
+  tasks:
+    - name: Update package list
+      apt:
+        update_cache: yes
+
+    - name: Upgrade all packages
+      apt:
+        upgrade: dist
+        autoremove: yes
+
+    - name: Update Proxmox-specific packages
+      apt:
+        name: proxmox-ve
+        state: latest
+
+    - name: Reboot if required
+      reboot:
+      when: ansible_facts['os_family'] == 'Debian'
+
+    - name: Wait for server to come back online
+      wait_for_connection:
+        delay: 60
+        sleep: 5
+        timeout: 300
+    
+    - name: Confirm server is back online
+      ping:
+      register: ping_result
+
+    - name: Get update summary
+      apt:
+        list: all
+      register: update_summary

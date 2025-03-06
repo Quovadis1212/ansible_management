@@ -1,0 +1,307 @@
+---
+- name: Configure LXC host
+  hosts: all
+  become: yes
+  vars:
+    hostname: "host-t01a"
+    bridge_name: "br0"
+    bridge_ip: "10.1.1.1"
+    bridge_interface: "ens19"
+    nat_range: "10.1.0.0/16"
+    tap_ip: "10.10.1.1"
+    external_interface: "ens18"
+  tasks:
+    # Step 1: Install LXC
+    - name: Install LXC if not installed
+      apt:
+        name: lxc
+        state: present
+        update_cache: yes
+
+    # Step 2: Configure swap
+    - name: Configure CONF_SWAPFACTOR in swap file
+      lineinfile:
+        path: /etc/dphys-swapfile
+        regexp: '^CONF_SWAPFACTOR=.*'
+        line: 'CONF_SWAPFACTOR=1'
+      notify: restart_swap
+
+    - name: Comment out CONF_SWAPSIZE in swap file
+      lineinfile:
+        path: /etc/dphys-swapfile
+        regexp: '^CONF_SWAPSIZE=.*'
+        line: '#&'
+        state: present
+      notify: restart_swap
+
+    # Step 3: Configure NetworkManager
+    - name: Create NetworkManager configuration
+      copy:
+        dest: /etc/NetworkManager/conf.d/10_NOS.conf
+        content: |
+          [main]
+          plugins=keyfile,ifccfg-rh
+
+          [keyfile]
+          unmanaged-devices=interface-name:{{ bridge_name }},interface-name:{{ bridge_interface }},interface-name:veth*,interface-name:tap*
+      notify: restart_network_manager
+
+    # Step 4: Configure avahi-daemon
+    - name: Configure avahi-daemon to allow only external interface
+      lineinfile:
+        path: /etc/avahi/avahi-daemon.conf
+        regexp: '^#allow-interfaces=.*'
+        line: 'allow-interfaces={{ bridge_interface }}'
+      notify: restart_avahi
+
+    # Step 5: Enable systemd-networkd
+    - name: Enable and start systemd-networkd
+      systemd:
+        name: systemd-networkd
+        enabled: yes
+        state: started
+
+    # Step 6: Create bridge network
+    - name: Create bridge netdev file
+      copy:
+        dest: /etc/systemd/network/10-{{ bridge_name }}.netdev
+        content: |
+          [NetDev]
+          Description=Bridge for LXC-Containers
+          Name={{ bridge_name }}
+          Kind=bridge
+
+    - name: Configure bridge network
+      copy:
+        dest: /etc/systemd/network/10-{{ bridge_name }}.network
+        content: |
+          [Match]
+          Name={{ bridge_name }}
+
+          [Network]
+          Address={{ bridge_ip }}/16
+          DHCP=no
+          LinkLocalAddressing=no
+          IPForward=ipv4
+
+    - name: Add interface to bridge
+      copy:
+        dest: /etc/systemd/network/10-{{ bridge_interface }}.network
+        content: |
+          [Match]
+          Name={{ bridge_interface }}
+
+          [Network]
+          DHCP=no
+          LinkLocalAddressing=no
+          Bridge={{ bridge_name }}
+      notify: restart_systemd_networkd
+
+    # Step 7: Configure systemd-networkd-wait-online.service.d
+    - name: Enable and start systemd-networkd-wait-online
+      systemd:
+        name: systemd-networkd-wait-online
+        enabled: yes
+        state: started
+
+    - name: Create directory for systemd-networkd-wait-online override
+      file:
+        path: /etc/systemd/system/systemd-networkd-wait-online.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Create systemd-networkd-wait-online override configuration
+      copy:
+        dest: /etc/systemd/system/systemd-networkd-wait-online.service.d/10-EXTERNAL_INTERFACE.conf
+        content: |
+          [Service]
+          ExecStart=
+          ExecStart=/lib/systemd/systemd-networkd-wait-online -i {{ external_interface }}:routable
+
+      notify: restart_systemd_daemon
+    # Copy ssh private key to host
+    - name: Copy SSH private key to host
+      copy:
+        src: "{{ lookup('env', 'HOME') }}/ansible/playbooks/nos/setup/nos_rsa"
+        dest: "/var/opt/nos/nos_rsa"
+        mode: "0600"
+    # Step 7: Configure SSH tunnel service
+    - name: Create NOS environment file
+      copy:
+        dest: /etc/default/nos
+        content: |
+          NOS_VPN_SERVER="teams@vpn.t-nos.ch"
+          NOS_VPN_PORT="-p 1022"
+          NOS_VPN_IDENTITY="/var/opt/nos/nos_rsa"
+          NOS_NET={{ nat_range }}
+
+    - name: Create SSH tunnel service
+      copy:
+        dest: /opt/nos/nos-vpn.service
+        content: |
+          [Unit]
+          Description=VPN over SSH for NOS
+          After=network.target network-online.target auditd.service
+          Wants=network-online.target
+          ConditionPathExists=!/etc/nos_not_to_be_run
+
+          [Service]
+          Type=simple
+          Environment="NOS_VPN_TAPNR=0"
+          EnvironmentFile=-/etc/default/nos
+          ExecStart=/usr/bin/ssh $NOS_VPN_SERVER $NOS_VPN_PORT -i $NOS_VPN_IDENTITY -o Tunnel=ethernet -w $NOS_VPN_TAPNR -T
+          Killmode=process
+          Restart=on-failure
+          RestartPreventExitStatus=255
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart_vpn_service
+
+    # Step 8: Create TAP interface
+    - name: Create TAP interface
+      copy:
+        dest: /etc/systemd/network/10-tap0.network
+        content: |
+          [Match]
+          Name=tap0
+
+          [Network]
+          Address={{ tap_ip }}/16
+          DHCP=No
+          LinkLocalAddressing=no
+          IPForward=ipv4
+      notify: restart_systemd_networkd
+
+    # Step 9: Configure NAT
+    - name: Create NAT rules
+      copy:
+        dest: /opt/nos/nos.nft
+        content: |
+          add table nos
+          add chain nos postrouting { type nat hook postrouting priority 0 ; }
+          add rule nos postrouting ip saddr $NOS_NET oif $WAN_IF snat to $BIND
+
+    - name: Create NAT script
+      copy:
+        dest: /opt/nos/nos.net
+        mode: "0755"
+        content: |
+          #!/bin/bash
+          if [ -r /etc/default/nos ]; then
+              . /etc/default/nos
+          fi
+          NOS_NET=${NOS_NET:-10.0.0.0/8}
+          WAN_IF=$(ip route | grep default | grep -P '(?<=dev )\S+' -o)
+          BIND=$(ip -4 address show dev $WAN_IF primary scope global | grep -P '(?<=inet )\d+\.\d+\.\d+\.\d+' -o)
+
+          echo "$(basename $0): interface $WAN_IF with $BIND $1"
+
+          case "$1" in
+              start)
+                  nft -f /opt/nos/nos.nft -D NOS_NET=${NOS_NET} -D WAN_IF=${WAN_IF} -D BIND=${BIND}
+                  ;;
+              stop)
+                  nft delete table nos
+                  ;;
+              *)
+                  echo "Usage: $(basename $0) {start|stop}"
+                  exit 1
+                  ;;
+          esac
+          exit 0
+      notify: restart_nat_service
+
+    - name: Create NAT service
+      copy:
+        dest: /opt/nos/nos-net.service
+        content: |
+          [Unit]
+          Description=NAT for NOS
+          After=network.target network-online.target auditd.service
+          Wants=network-online.target
+          ConditionPathExists=!/etc/nos_not_to_be_run
+
+          [Service]
+          Type=oneshot
+          EnvironmentFile=-/etc/default/nos
+          RemainAfterExit=yes
+          ExecStart=/bin/bash /opt/nos/nos.net start
+          ExecStop=/bin/bash /opt/nos/nos.net stop
+
+          [Install]
+          WantedBy=multi-user.target
+      notify: restart_nat_service
+
+    # Step 10: Install and configure FRR
+    - name: Install FRR
+      apt:
+        name: frr
+        state: present
+
+    - name: Configure FRR for RIP routing
+      copy:
+        dest: /etc/frr/frr.conf
+        content: |
+          hostname {{ hostname }}
+
+          router rip
+           network {{ bridge_name }}
+           network tap0
+      notify: restart_frr
+
+    # Step 11: Update LXC bridge
+    - name: Update LXC bridge configuration
+      lineinfile:
+        path: /etc/lxc/default.conf
+        regexp: '^lxc.net.0.link = lxcbr0'
+        line: 'lxc.net.0.link = br0'
+
+    - name: Disable LXC bridge
+      lineinfile:
+        path: /etc/default/lxc-net
+        regexp: '^USE_LXC_BRIDGE=.*'
+        line: 'USE_LXC_BRIDGE="false"'
+
+    - name: Restart LXC network service
+      systemd:
+        name: lxc-net
+        state: restarted
+
+  handlers:
+    - name: restart_swap
+      service:
+        name: dphys-swapfile
+        state: restarted
+
+    - name: restart_network_manager
+      service:
+        name: NetworkManager
+        state: restarted
+
+    - name: restart_avahi
+      service:
+        name: avahi-daemon
+        state: restarted
+
+    - name: restart_systemd_networkd
+      service:
+        name: systemd-networkd
+        state: restarted
+
+    - name: restart_vpn_service
+      systemd:
+        name: nos-vpn.service
+        state: restarted
+        enabled: yes
+
+    - name: restart_nat_service
+      systemd:
+        name: nos-net.service
+        state: restarted
+        enabled: yes
+
+    - name: restart_frr
+      service:
+        name: frr
+        state: restarted

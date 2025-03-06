@@ -1,0 +1,57 @@
+---
+- name: Manage LXC Container
+  hosts: raspberrypi
+  become: true
+
+  vars:
+    bridge_name: br0
+    lxc_name: user1
+    lxc_ip: 10.1.1.12
+    lxc_gateway: 10.1.1.1
+    lxc_config: "/var/lib/lxc/{{ lxc_name }}/config"
+    ssh_key_source: "/home/{{ ansible_user }}/.ssh/id_rsa.pub"
+    ssh_key_dest: "/home/pi/.ssh/id_rsa.pub"
+
+  tasks:
+    - name: Ensure SSH key is present on the managed node
+      copy:
+        src: "{{ ssh_key_source }}"
+        dest: "{{ ssh_key_dest }}"
+        owner: pi
+        group: pi
+        mode: '0644'
+
+    - name: Check if LXC container exists
+      command: lxc-info -n {{ lxc_name }}
+      register: lxc_info
+      ignore_errors: yes
+
+    - name: Create LXC Container
+      command: >
+        lxc-create -n {{ lxc_name }} -t debian+ --
+        -r bullseye --packages=iputils-ping,nano,dnsutils,isc-dhcp-client- --
+        --auth-key {{ ssh_key_dest }}
+      when: lxc_info.rc != 0
+
+    - name: Configure LXC container network
+      block:
+        - name: Set lxc.net.0.link in LXC config
+          lineinfile:
+            path: "{{ lxc_config }}"
+            regexp: '^lxc.net.0.link =.*'
+            line: "lxc.net.0.link = {{ bridge_name }}"
+
+        - name: Append IPv4 gateway to LXC config
+          lineinfile:
+            path: "{{ lxc_config }}"
+            line: "lxc.net.0.ipv4.gateway = {{ lxc_gateway }}"
+            insertafter: EOF
+
+        - name: Append IPv4 address to LXC config
+          lineinfile:
+            path: "{{ lxc_config }}"
+            line: "lxc.net.0.ipv4.address = {{ lxc_ip }}/16"
+            insertafter: EOF
+
+    - name: Start LXC Container
+      command: lxc-start -n {{ lxc_name }} -d

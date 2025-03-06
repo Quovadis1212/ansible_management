@@ -1,0 +1,24 @@
+---
+- name: Configure Apacheds inside LXC on Raspberry Pi
+  hosts: raspberrypi
+  become: true
+  vars:
+    container_name: ldap1
+  
+  tasks:
+    - name: Set DNS server in /etc/resolv.conf
+      lineinfile:
+        path: /var/lib/lxc/{{ container_name }}/rootfs/etc/resolv.conf
+        line: "nameserver 10.10.1.1"
+    
+    - name: Install Apacheds inside the LXC container
+      command: lxc-attach -n {{ container_name }} -- apt-get install -y apacheds
+      ignore_errors: yes
+    
+    - name: Start Apacheds service
+      command: lxc-attach -n {{ container_name }} -- systemctl start apacheds
+      ignore_errors: yes
+    
+  
+        
+

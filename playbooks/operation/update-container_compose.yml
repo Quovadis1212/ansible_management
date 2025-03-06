@@ -1,0 +1,40 @@
+- name: Update Docker Compose Containers
+  hosts: docker_containers
+  become: yes
+
+  tasks:
+    - name: Find all directories with docker-compose.yaml files
+      find:
+        paths: /docker/compose
+        patterns: docker-compose.yaml
+        recurse: yes
+        file_type: file
+      register: compose_files
+
+    - name: Extract directories containing docker-compose.yaml
+      set_fact:
+        compose_directories: "{{ compose_files.files | map(attribute='path') | map('dirname') | list }}"
+
+    - name: Debug found directories
+      debug:
+        var: compose_directories
+
+    - name: Pull the latest images for each project
+      ansible.builtin.command:
+        cmd: docker compose pull
+        chdir: "{{ item }}"
+      loop: "{{ compose_directories }}"
+      register: pull_output
+      failed_when: pull_output.rc != 0
+      loop_control:
+        label: "{{ item }}"
+
+    - name: Recreate and restart containers for each project
+      ansible.builtin.command:
+        cmd: docker compose up -d --force-recreate
+        chdir: "{{ item }}"
+      loop: "{{ compose_directories }}"
+      register: up_output
+      failed_when: up_output.rc != 0
+      loop_control:
+        label: "{{ item }}"
